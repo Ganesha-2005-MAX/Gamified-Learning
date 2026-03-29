@@ -2,8 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import { useGame } from '../context/GameContext';
-import { subjects } from '../data/subjects';
-import { ChevronRight, FileText, BookOpen, Target, Zap } from 'lucide-react';
+import { ChevronRight, FileText, BookOpen, Target, Zap, Loader2 } from 'lucide-react';
 
 const subjectColors: Record<string, { color: string; bg: string; light: string }> = {
   physics: { color: '#4F46E5', bg: 'rgba(79,70,229,0.08)', light: '#EEF2FF' },
@@ -13,8 +12,17 @@ const subjectColors: Record<string, { color: string; bg: string; light: string }
 };
 
 export const SubjectsPage: React.FC = () => {
-  const { state, getSubjectAccuracy, getChapterProgress } = useGame();
+  const { filteredSubjects: subjects, loading, getSubjectAccuracy, getChapterProgress, state } = useGame();
   const navigate = useNavigate();
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+        <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
+        <p className="text-slate-500 font-medium">Loading your learning world...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">

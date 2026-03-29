@@ -2,8 +2,7 @@ import React from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { motion } from 'motion/react';
 import { useGame } from '../context/GameContext';
-import { subjects } from '../data/subjects';
-import { Lock, CheckCircle, Star, Zap, ArrowLeft, Play, Trophy, Target } from 'lucide-react';
+import { Lock, CheckCircle, Star, Zap, ArrowLeft, Play, Trophy, Target, Loader2 } from 'lucide-react';
 
 const subjectColors: Record<string, { color: string; bg: string; light: string }> = {
   physics: { color: '#4F46E5', bg: 'rgba(79,70,229,0.08)', light: '#EEF2FF' },
@@ -20,11 +19,29 @@ const difficultyInfo = {
 
 export const ChaptersPage: React.FC = () => {
   const { subjectId } = useParams<{ subjectId: string }>();
-  const { state, getChapterProgress, getSubjectAccuracy } = useGame();
+  const { state, subjects, loading, getChapterProgress, getSubjectAccuracy } = useGame();
   const navigate = useNavigate();
 
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+        <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
+        <p className="text-slate-500 font-medium">Loading chapters...</p>
+      </div>
+    );
+  }
+
   const subject = subjects.find(s => s.id === subjectId);
-  if (!subject) return null;
+  if (!subject) {
+    return (
+      <div className="text-center py-20">
+        <h2 className="text-xl font-bold text-slate-800">Subject not found</h2>
+        <button onClick={() => navigate('/subjects')} className="mt-4 text-indigo-600 font-semibold underline">
+          Go back to Subjects
+        </button>
+      </div>
+    );
+  }
 
   const sc = subjectColors[subject.id] || { color: '#4F46E5', bg: 'rgba(79,70,229,0.08)', light: '#EEF2FF' };
   const accuracy = getSubjectAccuracy(subject.id);

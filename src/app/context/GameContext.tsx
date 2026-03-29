@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getLevelFromXP, getXPForNextLevel, LEVEL_NAMES, BADGES } from '../data/subjects';
+import { getLevelFromXP, getXPForNextLevel, LEVEL_NAMES, Subject } from '../data/subjects';
+import { supabase } from '../../lib/supabase';
 
 export interface UserProfile {
   id: string;
@@ -44,8 +45,11 @@ export interface GameState {
 
 interface GameContextType {
   state: GameState;
+  subjects: Subject[];
+  filteredSubjects: Subject[];
+  loading: boolean;
   login: (user: UserProfile) => void;
-  signup: (user: Omit<UserProfile, 'id' | 'joinedDate'>, password: string) => boolean;
+  signup: (user: Omit<UserProfile, 'id' | 'joinedDate'>, password: string) => Promise<boolean>;
   logout: () => void;
   addXP: (amount: number) => void;
   addCoins: (amount: number) => void;
@@ -90,6 +94,151 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   });
 
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch subjects on mount
+  useEffect(() => {
+    async function fetchSubjects() {
+      try {
+        setLoading(true);
+        const { data, error } = await supabase
+          .from('subjects')
+          .select('*, chapters(*)');
+
+        if (error) throw error;
+
+        const transformed: Subject[] = (data || []).map((s: any) => ({
+          id: s.id,
+          name: s.name,
+          icon: s.icon,
+          color: s.color,
+          secondaryColor: s.secondary_color,
+          glowColor: s.glow_color,
+          description: s.description,
+          world: s.world,
+          class: s.class || '10',
+          targetExams: s.target_exams || [],
+          chapters: (s.chapters || []).sort((a: any, b: any) => {
+            if (a.is_boss_fight) return 1;
+            if (b.is_boss_fight) return -1;
+            return a.difficulty - b.difficulty;
+          }).map((c: any) => ({
+             id: c.id,
+             name: c.name,
+             icon: c.icon,
+             description: c.description,
+             difficulty: c.difficulty,
+             xpReward: c.xp_reward,
+             coinReward: c.coin_reward,
+             isBossFight: c.is_boss_fight,
+             questionCount: c.question_count
+          }))
+        }));
+
+        setSubjects(transformed);
+      } catch (err) {
+        console.error('Failed to fetch subjects:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchSubjects();
+  }, []);
+
+  // Auth/Profile Sync Logic
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session?.user) {
+        await fetchUserProfile(session.user.id, session.user.email || '');
+      } else if (event === 'SIGNED_OUT') {
+        setState(prev => ({ ...prev, user: null }));
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchUserProfile = async (userId: string, email: string) => {
+    try {
+      setLoading(true);
+      const { data: profile, error: profileErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (profileErr && profileErr.code !== 'PGRST116') throw profileErr;
+
+      if (profile) {
+        const { data: stats, error: statsErr } = await supabase
+          .from('user_stats')
+          .select('*')
+          .eq('user_id', userId)
+          .single();
+
+        const { data: progress, error: progressErr } = await supabase
+          .from('chapter_progress')
+          .select('*')
+          .eq('user_id', userId);
+
+        const { data: daily, error: dailyErr } = await supabase
+          .from('daily_stats')
+          .select('*')
+          .eq('user_id', userId);
+
+        setState(prev => ({
+          ...prev,
+          user: {
+            id: profile.id,
+            name: profile.name,
+            email: profile.email,
+            class: profile.class,
+            targetExam: profile.target_exam,
+            avatar: profile.avatar,
+            joinedDate: profile.created_at,
+          },
+          xp: stats?.xp || 0,
+          coins: stats?.coins || 0,
+          streak: stats?.streak || 0,
+          totalAttempts: stats?.total_attempts || 0,
+          correctAttempts: stats?.correct_attempts || 0,
+          chapterProgress: (progress || []).map(p => ({
+            subjectId: p.subject_id,
+            chapterId: p.chapter_id,
+            attempts: p.attempts,
+            correct: p.correct,
+            completed: p.completed,
+            bestAccuracy: p.best_accuracy,
+            lastAttempted: p.last_attempted,
+          })),
+          dailyStats: (daily || []).map(d => ({
+            date: d.date,
+            xpEarned: d.xp_earned,
+            questionsAttempted: d.questions_attempted,
+            correct: d.correct_count,
+          })),
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to fetch profile:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const filteredSubjects = React.useMemo(() => {
+    if (!state.user) {
+      // Default for guests: Class 10 Boards
+      return subjects.filter(s => s.class === '10' && s.targetExams.includes('Boards'));
+    }
+    return subjects.filter(s => {
+      const classMatches = s.class === state.user?.class;
+      const examMatches = s.targetExams.includes(state.user?.targetExam || 'Boards');
+      return classMatches && examMatches;
+    });
+  }, [subjects, state.user]);
+
   const level = getLevelFromXP(state.xp);
   const levelName = LEVEL_NAMES[Math.min(level - 1, LEVEL_NAMES.length - 1)];
   const currentLevelXP = getXPForNextLevel(level - 1);
@@ -99,7 +248,55 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     localStorage.setItem('gameState', JSON.stringify(state));
+    
+    // Sync to Supabase if logged in
+    if (state.user) {
+      syncToSupabase();
+    }
   }, [state]);
+
+  const syncToSupabase = useCallback(async () => {
+    if (!state.user) return;
+    try {
+      // Sync stats
+      await supabase.from('user_stats').upsert({
+        user_id: state.user.id,
+        xp: state.xp,
+        coins: state.coins,
+        streak: state.streak,
+        total_attempts: state.totalAttempts,
+        correct_attempts: state.correctAttempts,
+        last_login_date: new Date().toISOString()
+      });
+
+      // Sync progress (batch update would be better, but standard for now)
+      for (const p of state.chapterProgress) {
+        await supabase.from('chapter_progress').upsert({
+          user_id: state.user.id,
+          subject_id: p.subjectId,
+          chapter_id: p.chapterId,
+          attempts: p.attempts,
+          correct: p.correct,
+          completed: p.completed,
+          best_accuracy: p.bestAccuracy,
+          last_attempted: p.lastAttempted
+        });
+      }
+
+      // Sync daily stats
+      for (const d of state.dailyStats) {
+        await supabase.from('daily_stats').upsert({
+          user_id: state.user.id,
+          date: d.date,
+          xp_earned: d.xpEarned,
+          questions_attempted: d.questionsAttempted,
+          correct_count: d.correct
+        });
+      }
+    } catch (err) {
+      console.error('Sync failed:', err);
+    }
+  }, [state.user, state.xp, state.coins, state.streak, state.totalAttempts, state.correctAttempts, state.chapterProgress, state.dailyStats]);
 
   const login = useCallback((user: UserProfile) => {
     setState(prev => {
@@ -133,22 +330,51 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   }, []);
 
-  const signup = useCallback((userData: Omit<UserProfile, 'id' | 'joinedDate'>, _password: string): boolean => {
+  const signup = useCallback(async (userData: Omit<UserProfile, 'id' | 'joinedDate'>, _password: string): Promise<boolean> => {
     try {
-      const users = JSON.parse(localStorage.getItem('users') || '[]');
-      if (users.find((u: UserProfile) => u.email === userData.email)) {
-        return false;
-      }
+      // 1. Create Supabase Auth User
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: userData.email,
+        password: _password,
+        options: {
+          data: {
+            name: userData.name,
+            class: userData.class,
+            target_exam: userData.targetExam,
+          }
+        }
+      });
+
+      if (authError) throw authError;
+      if (!authData.user) return false;
+
       const newUser: UserProfile = {
         ...userData,
-        id: Date.now().toString(),
+        id: authData.user.id,
         joinedDate: new Date().toISOString(),
       };
-      users.push({ ...newUser, password: _password });
-      localStorage.setItem('users', JSON.stringify(users));
+
+      // 2. Create Profile record
+      await supabase.from('profiles').insert({
+        id: authData.user.id,
+        name: userData.name,
+        email: userData.email,
+        class: userData.class,
+        target_exam: userData.targetExam,
+        avatar: userData.avatar
+      });
+
+      // 3. Initialize stats
+      await supabase.from('user_stats').insert({
+        user_id: authData.user.id,
+        xp: 0,
+        coins: 0
+      });
+
       login(newUser);
       return true;
-    } catch {
+    } catch (err) {
+      console.error('Signup failed:', err);
       return false;
     }
   }, [login]);
@@ -315,7 +541,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <GameContext.Provider value={{
-      state, login, signup, logout, addXP, addCoins, spendCoins,
+      state, subjects, filteredSubjects, loading, login, signup, logout, addXP, addCoins, spendCoins,
       updateProgress, unlockBadge, checkAndAwardBadges,
       level, levelName, xpForNextLevel, xpProgressPercent,
       getChapterProgress, getSubjectAccuracy, getWeakSubjects,

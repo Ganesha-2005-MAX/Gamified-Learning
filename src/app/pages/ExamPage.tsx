@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { motion, AnimatePresence } from 'motion/react';
 import { useGame } from '../context/GameContext';
-import { questions, Question } from '../data/questions';
-import { subjects } from '../data/subjects';
-import { Clock, AlertCircle, CheckCircle, XCircle, BarChart2, ArrowLeft, ArrowRight, Flag, Zap, LogOut } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
+import { Question } from '../data/questions';
+import { Clock, AlertCircle, CheckCircle, XCircle, BarChart2, ArrowLeft, ArrowRight, Flag, Zap, LogOut, Loader2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 type ExamType = 'CBSE_10' | 'CBSE_12' | 'NEET' | 'CUET';
@@ -31,21 +31,12 @@ function shuffle<T>(arr: T[]): T[] {
   return [...arr].sort(() => Math.random() - 0.5);
 }
 
-function buildExamQuestions(config: ExamConfig): Question[] {
-  const perSubject = Math.floor(config.totalQ / config.subjects.length);
-  const pool: Question[] = [];
-  config.subjects.forEach(subj => {
-    const subjectQs = shuffle(questions.filter(q => q.subjectId === subj)).slice(0, perSubject);
-    pool.push(...subjectQs);
-  });
-  return shuffle(pool).slice(0, config.totalQ);
-}
-
 export const ExamPage: React.FC = () => {
   const navigate = useNavigate();
-  const { addXP, addCoins } = useGame();
+  const { subjects, loading: subjectsLoading, addXP, addCoins } = useGame();
   const [examType, setExamType] = useState<ExamType>('NEET');
   const [status, setStatus] = useState<ExamStatus>('setup');
+  const [isFetching, setIsFetching] = useState(false);
   const [examQuestions, setExamQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<(string | null)[]>([]);
   const [markedForReview, setMarkedForReview] = useState<boolean[]>([]);
@@ -108,15 +99,59 @@ export const ExamPage: React.FC = () => {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [status, examQuestions, finishExam]);
 
-  const startExam = () => {
-    const qs = buildExamQuestions(config);
-    setExamQuestions(qs);
-    setAnswers(new Array(qs.length).fill(null));
-    setMarkedForReview(new Array(qs.length).fill(false));
-    setCurrentIdx(0);
-    setTimeLeft(config.durationMin * 60);
-    setStatus('running');
-    setResult(null);
+  const startExam = async () => {
+    try {
+      setIsFetching(true);
+      const perSubject = Math.floor(config.totalQ / config.subjects.length);
+      
+      const { data, error } = await supabase
+        .from('questions')
+        .select('*')
+        .in('subject_id', config.subjects);
+
+      if (error) throw error;
+
+      // Transform and sample questions
+      const allQs: Question[] = (data || []).map((q: any) => ({
+        id: q.id,
+        subjectId: q.subject_id,
+        chapterId: q.chapter_id,
+        type: q.type,
+        difficulty: q.difficulty,
+        question: q.question,
+        options: q.options,
+        correctAnswer: q.correct_answer,
+        explanation: q.explanation,
+        hint: q.hint,
+        tags: q.tags || []
+      }));
+
+      const pool: Question[] = [];
+      config.subjects.forEach(subj => {
+        const subjectQs = shuffle(allQs.filter(q => q.subjectId === subj)).slice(0, perSubject);
+        pool.push(...subjectQs);
+      });
+
+      const finalQs = shuffle(pool).slice(0, config.totalQ);
+      
+      if (finalQs.length === 0) {
+        alert('No questions found for this exam type in the database.');
+        return;
+      }
+
+      setExamQuestions(finalQs);
+      setAnswers(new Array(finalQs.length).fill(null));
+      setMarkedForReview(new Array(finalQs.length).fill(false));
+      setCurrentIdx(0);
+      setTimeLeft(config.durationMin * 60);
+      setStatus('running');
+      setResult(null);
+    } catch (err) {
+      console.error('Failed to generate exam:', err);
+      alert('Error generating exam. Please try again.');
+    } finally {
+      setIsFetching(false);
+    }
   };
 
   const selectAnswer = (answer: string) => {

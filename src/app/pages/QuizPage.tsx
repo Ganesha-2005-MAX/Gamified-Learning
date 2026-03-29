@@ -2,10 +2,10 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { motion, AnimatePresence } from 'motion/react';
 import { useGame } from '../context/GameContext';
-import { subjects, getChapter } from '../data/subjects';
-import { questions, Question } from '../data/questions';
+import { useQuestions } from '../../hooks/useSupabaseData';
+import { Question } from '../data/questions';
 import confetti from 'canvas-confetti';
-import { ArrowLeft, Zap, Clock, CheckCircle, XCircle, Lightbulb, SkipForward, Trophy, Star } from 'lucide-react';
+import { ArrowLeft, Zap, Clock, CheckCircle, XCircle, Lightbulb, SkipForward, Trophy, Star, Loader2 } from 'lucide-react';
 
 const QUESTION_TIME = 30;
 
@@ -16,17 +16,25 @@ function shuffle<T>(arr: T[]): T[] {
 export const QuizPage: React.FC = () => {
   const { subjectId, chapterId } = useParams<{ subjectId: string; chapterId: string }>();
   const navigate = useNavigate();
-  const { addXP, addCoins, updateProgress, checkAndAwardBadges } = useGame();
+  const { subjects, loading: subjectsLoading, addXP, addCoins, updateProgress, checkAndAwardBadges } = useGame();
+  
+  const { questions: rawQuestions, loading: questionsLoading } = useQuestions(subjectId!, chapterId!);
 
   const subject = subjects.find(s => s.id === subjectId);
-  const chapter = getChapter(subjectId!, chapterId!);
+  const chapter = subject?.chapters.find(c => c.id === chapterId);
 
-  const [quizQuestions] = useState<Question[]>(() => {
-    const pool = questions.filter(q => q.subjectId === subjectId && q.chapterId === chapterId);
-    const shuffled = shuffle(pool);
-    const count = chapter?.isBossFight ? Math.min(15, shuffled.length) : Math.min(10, shuffled.length);
-    return shuffled.slice(0, count).length > 0 ? shuffled.slice(0, count) : shuffle(questions.filter(q => q.subjectId === subjectId)).slice(0, 10);
-  });
+  const [quizQuestions, setQuizQuestions] = useState<Question[]>([]);
+  const [initialized, setInitialized] = useState(false);
+
+  useEffect(() => {
+    if (!questionsLoading && rawQuestions.length > 0 && !initialized) {
+      const pool = rawQuestions;
+      const shuffled = shuffle(pool);
+      const count = chapter?.isBossFight ? Math.min(15, shuffled.length) : Math.min(10, shuffled.length);
+      setQuizQuestions(shuffled.slice(0, count));
+      setInitialized(true);
+    }
+  }, [questionsLoading, rawQuestions, chapter, initialized]);
 
   const [currentIdx, setCurrentIdx] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
@@ -45,10 +53,10 @@ export const QuizPage: React.FC = () => {
   const [answers, setAnswers] = useState<(string | null)[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const currentQ = quizQuestions[currentIdx];
+  const currentQ = quizQuestions[currentIdx] || ({} as Question);
   const isBoss = chapter?.isBossFight;
   const totalQ = quizQuestions.length;
-  const progressPct = (currentIdx / totalQ) * 100;
+  const progressPct = (currentIdx / Math.max(totalQ, 1)) * 100;
 
   const stopTimer = useCallback(() => {
     if (timerRef.current) {
@@ -146,13 +154,23 @@ export const QuizPage: React.FC = () => {
     }
   }, [timeLeft, showFeedback, gameOver, stopTimer]);
 
-  if (!subject || !chapter || quizQuestions.length === 0) {
+  if (subjectsLoading || (questionsLoading && !initialized)) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+        <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
+        <p className="text-slate-500 font-medium">Entering the arena...</p>
+      </div>
+    );
+  }
+
+  if (!subject || !chapter || (initialized && quizQuestions.length === 0)) {
     return (
       <div style={{ background: '#F0F4FF', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div className="text-center">
+        <div className="text-center p-8 bg-white rounded-[32px] shadow-xl max-w-md">
           <div style={{ fontSize: '4rem', marginBottom: 16 }}>😕</div>
-          <h2 style={{ color: '#1E293B', marginBottom: 16 }}>No questions found for this chapter</h2>
-          <button onClick={() => navigate(`/subjects/${subjectId}`)} className="edu-btn-primary" style={{ padding: '10px 24px' }}>
+          <h2 className="text-2xl font-black text-slate-800 mb-2">No questions found</h2>
+          <p className="text-slate-500 mb-6">We couldn't find any questions for this chapter in the database yet.</p>
+          <button onClick={() => navigate(`/subjects/${subjectId}`)} className="edu-btn-primary w-full py-3 rounded-xl">
             Go Back
           </button>
         </div>

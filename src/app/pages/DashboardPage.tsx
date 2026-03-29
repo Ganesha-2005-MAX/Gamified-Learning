@@ -6,7 +6,7 @@ import { subjects, BADGES, LEVEL_NAMES, getLevelFromXP } from '../data/subjects'
 import {
   Zap, Flame, Trophy, Target, BookOpen, Play, ArrowRight,
   TrendingUp, Clock, Bell, Search, ChevronRight, BarChart2,
-  MessageSquare, FileText, Star, Award, Sparkles, CheckCircle2, User, Settings, LogOut, ChevronDown, Command
+  MessageSquare, FileText, Star, Award, Sparkles, CheckCircle2, User, Settings, LogOut, ChevronDown, Command, Loader2
 } from 'lucide-react';
 
 // New Dashboard Components
@@ -24,7 +24,10 @@ const motivationalQuotes = [
 ];
 
 export const DashboardPage: React.FC = () => {
-  const { state, level, levelName, xpForNextLevel, xpProgressPercent, getSubjectAccuracy, getWeakSubjects, checkAndAwardBadges, updateStreak } = useGame();
+  const { state, filteredSubjects, loading, level, levelName, xpForNextLevel, xpProgressPercent, getSubjectAccuracy, getWeakSubjects, checkAndAwardBadges, updateStreak } = useGame();
+  const topSubjects = filteredSubjects.slice(0, 4);
+  const weakSubjectIds = getWeakSubjects().filter(id => filteredSubjects.some(s => s.id === id));
+  const weakSubjects = filteredSubjects.filter(s => weakSubjectIds.includes(s.id));
   const navigate = useNavigate();
   const [quote] = useState(motivationalQuotes[Math.floor(Math.random() * motivationalQuotes.length)]);
 
@@ -33,11 +36,20 @@ export const DashboardPage: React.FC = () => {
     checkAndAwardBadges();
   }, []);
 
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+        <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
+        <p className="text-slate-500 font-medium">Preparing your dashboard...</p>
+      </div>
+    );
+  }
+
   const overallAccuracy = state.totalAttempts > 0
     ? Math.round((state.correctAttempts / state.totalAttempts) * 100)
     : 0;
 
-  const weakSubjects = getWeakSubjects();
+  // const weakSubjects = getWeakSubjects(); // Removed duplicate
 
   const xpChartData = Array.from({ length: 7 }, (_, i) => {
     const d = new Date();
@@ -51,7 +63,7 @@ export const DashboardPage: React.FC = () => {
     };
   });
 
-  const radarData = subjects.map(s => ({
+  const radarData = filteredSubjects.map(s => ({
     subject: s.name,
     accuracy: getSubjectAccuracy(s.id),
     fullMark: 100,
@@ -59,12 +71,12 @@ export const DashboardPage: React.FC = () => {
 
   const recentBadges = BADGES.filter(b => state.badges.includes(b.id)).slice(-4);
   const completedChapters = state.chapterProgress.filter(p => p.completed).length;
-  const totalChapters = subjects.reduce((sum, s) => sum + s.chapters.length, 0);
+  const totalChapters = filteredSubjects.reduce((sum, s) => sum + s.chapters.length, 0);
 
   const lastAttempt = [...state.chapterProgress].sort((a, b) =>
     new Date(b.lastAttempted || 0).getTime() - new Date(a.lastAttempted || 0).getTime()
   )[0];
-  const continueSubject = lastAttempt ? subjects.find(s => s.id === lastAttempt.subjectId) : subjects[0];
+  const continueSubject = lastAttempt ? filteredSubjects.find(s => s.id === lastAttempt.subjectId) || filteredSubjects[0] : filteredSubjects[0];
 
   const topStatCards = [
     {
@@ -102,8 +114,8 @@ export const DashboardPage: React.FC = () => {
   ];
 
   // AI-powered insights logic
-  const recommendations: any[] = weakSubjects.map(ws => {
-    const subj = subjects.find(s => s.id === ws);
+  const recommendations: any[] = weakSubjectIds.map(ws => {
+    const subj = filteredSubjects.find(s => s.id === ws);
     return {
       id: ws,
       subject: subj?.name || 'General',
@@ -228,7 +240,7 @@ export const DashboardPage: React.FC = () => {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {subjects.map(subject => {
+                  {filteredSubjects.map(subject => {
                     const accuracy = getSubjectAccuracy(subject.id);
                     const completedInSubject = state.chapterProgress.filter(
                       p => p.subjectId === subject.id && p.completed
